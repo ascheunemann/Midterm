@@ -1,0 +1,106 @@
+library(pacman)
+
+p_load(tidyverse, psych, haven, polycor, caret, car, MASS)
+
+cambridge <- read_sav("data/Cambridge_delinquency_with_caseid.sav")
+
+# Question 1: Creating a dataset
+
+## My slight previous knowledge of delinquency would initially lead me to want to consider variables such as gender, ethnicity, and SES as covariates. However, the background literature provided notes that this all-boy sample is overwhelmingly white and of a similar socioeconomic status. Low variability in the data will hinder analysis of differences, and so descriptive statistics will be used to test variance and assess the usability of the variables
+## The literature also notes that data were collected from multiple sources - parents, teachers, peers, and the individuals themselves. I will use data collected from each source, so that information can be triangulated for a stronger analysis.
+## I also note that the authors listed on page 22 factors that they found to be predictors of criminality - these will be included in the dataset that I create.
+## Additionally, the model the authors eventually create included inhibiting factors such as consicience, empathy, and skills - these will be included in dataset I create.
+## Given the goal listed in question 3 of early predictors of criminality, I will include variables listed at the first time point only as predictors (when the boys were aged 8 - 10). I will collapse criminality into two variables - a binary that includes whether or not an individual was ever convicted, and a listing of the total number of convictions
+
+## I first want to get a brief glimpse of the dataset
+
+head(cambridge)
+
+## I noted that there were combined conviction variables, but the seemed to be collapsed to factors instead of being numeric, so I created my own variable of the number of convictions.
+cambridge <- cambridge %>% 
+  mutate(total_convictions = (v13 + v14 + v15 + v16 + v17 + v18 + v19 + v20 + v21 + v22 + v23 + v24 + v25 + v26 + v27), na.rm = T)
+
+## I then used the variable I created to create a binary variable of whether or not the participant had ever been convicted.
+cambridge <- cambridge %>% 
+  mutate(ever_convicted = ifelse(total_convictions > 0, "yes", "no"))
+
+## I then checked the variables to make sure nothing looked too fishy, and converted the "ever_convicted" variable to a factor.
+cambridge$total_convictions
+cambridge$ever_convicted
+
+cambridge$ever_convicted <- as.factor(cambridge$ever_convicted)
+
+## I next created an abbreviated dataset of variables that looked like the could possible affect the likelihood and rate of convictions in the sample. Most of the variables are social, and were selected based on the criteria named above.
+cam.abbrev <- cambridge %>%
+  select(v4, v42, v54, v89, v91, v104, v108, v117:v119, v124, v125, v132, v134, v142, v154, v155, v158, v159, v165, v168:v171, v178, v179, total_convictions, ever_convicted)
+
+## I still have quite a few variables and wanted to get at least an idea of what some of the variables looked like, and if any of them were missing so much data as to render them dubious, so I checked with the "summary" function. I excluded variables in which more than 5% of the data were missing, leaving me with a total of 15 variables.
+summary(cam.abbrev)  
+
+cam.abbrev <- cam.abbrev %>% 
+  select(-c(v89, v91, v104, v108, v117, v118, v124, v125, v132, v159, v178, v179))
+
+glimpse(cam.abbrev)
+
+## I proceeded to rename the selected variables into something that made more sense, and the for simplicity omit incomplete data:
+cam.abbrev <- rename(cam.abbrev, research.id = v4, acting.out = v42, conduct.disorder = v54, iq = v119, broken.home = v134, social.handicap = v142, attendance = v155, teacher.rating = v154, verbal.comp = v158, lazy = v165, apathy = v168, concentration = v169, peer.relations = v170, cleanliness = v171)
+cam.abbrev <- na.omit(cam.abbrev) 
+
+# Question 2: Exploring the dataset
+
+## I began by exploring a simple table of descritive statistics for the variables. The variables all look like factor variables with the exception of total_convictions, but they are currently listed as numeric. I changed this. Because the data are factors, determining correlations will be tricky.
+
+cam.abbrev <- cam.abbrev %>% 
+  mutate_if(is.numeric,funs(as.integer(.))) %>% 
+  mutate(total_convictions = as.numeric(total_convictions)) %>% 
+  mutate(research.id = as.character(research.id))
+
+str(cam.abbrev)
+
+## Descriptives show that only about a third of the participants were ever convicted. Of those convicted, the mean total convictions suggests that most were only convicted a few times, but the range suggests that at least some participants were convicted many times.
+describe(cam.abbrev)
+cam.abbrev %>% 
+  count(ever_convicted)
+
+## A histogram confirms that the data in the dependent variable are not normally distributed.
+hist(cam.abbrev$total_convictions)
+
+## I used the hetcor function to explore pearson and polyserial relationships between the dependent variables and other factor variables. Based on these correlations, conduct disorder and social handicap should be retained for a model involving total convictions. Because IQ showed a moderate correlation with whether a person had ever been convicted, I decided to retain that variable as well.
+
+hetcor(as.data.frame(cam.abbrev[, 2:16]))
+
+## Additionally, boxplots show a trend of convictions increasing at higher levels of the variables of interest.
+
+ggplot(cam.abbrev, aes(social.handicap, total_convictions)) +
+  geom_boxplot() + 
+  facet_grid(~social.handicap)
+
+ggplot(cam.abbrev, aes(conduct.disorder, total_convictions)) +
+  geom_boxplot() +
+  facet_grid(~conduct.disorder)
+
+## For the IQ variable that showed a correlation with the binary "ever_convicted", a bar plot suggests that individuals with higher IQ levels were less likely to be convicted of a crime.
+ggplot(cam.abbrev) +
+  geom_bar(mapping = aes(x = ever_convicted, fill = iq), position = "dodge")
+
+# Question 3: Modeling
+
+## I first added my three variables to a simple linear model, without
+model1 <- lm(total_convictions ~ social.handicap + conduct.disorder + iq, data = cam.abbrev)
+summary(model1)
+residualPlots(model1)
+
+## I already established that the dependent variable is non-normal, but this is confirmed by the residual plots. I will therefore attempt a boxTidwell transformation. I cannot attempt a boxCox because the dependent variable contains zeroes.
+boxTidwell(total_convictions ~ social.handicap + conduct.disorder + iq, data = cam.abbrev)
+
+tidwell.model <- lm(total_convictions ~ I(social.handicap^6.2) + I(conduct.disorder^3.6) + iq, 
+                             data = cam.abbrev)
+summary(tidwell.model)
+residualPlots(tidwell.model)
+hist(tidwell.model$residuals)
+
+## This does not seem to have made much difference, so I will retain model1 for the sake of simplicity. From this model, it appears that all variables are significant, social handicap to p < .001, conduct disorder to p < .001, and iq to p < .05. Social handicap is a composite of challenges a child could face and includes whether the family was being supported by social agencies, low income and socioeconmic status, poor or neglected housing conditions, large families, and physical neglect of the boy. Larger values suggest more hardship. This model indicates that more social handicap is associated with a greater number of convictions. Conduct disorder is a combined rating from the boys' teachers and the interviewer; higher levels indicate worse ratings by bother teacher and interviewer. This model suggests that greater issues of conduct disorder at a young age are associated with more convictions. Lastly, a the IQ variable was coded such that a higher rating indicated a lower IQ. This model therefore indicates that a lower IQ is associated with more convictions. The model overall explains roughly 16.5% of the variance in the data.
+
+## Just to confirm the results, I will run a similar model with the binary variable ever_convicted
+model2 <- glm(ever_convicted ~ social.handicap + conduct.disorder + iq, family = "binomial", data = cam.abbrev)
+summary(model2)
